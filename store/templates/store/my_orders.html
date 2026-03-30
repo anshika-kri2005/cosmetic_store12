@@ -1,0 +1,76 @@
+{% load static %}
+<!DOCTYPE html>
+<html>
+<head>
+<title>My Orders</title>
+<link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.2/dist/css/bootstrap.min.css" rel="stylesheet">
+
+<style>
+body{
+    background:linear-gradient(135deg,#fff0f6,#fde2ea);
+    font-family:'Segoe UI',sans-serif;
+}
+.order-card{
+    border:none;
+    border-radius:20px;
+    box-shadow:0 12px 40px rgba(255,105,135,0.15);
+    background:white;
+    padding:20px;
+    margin-bottom:20px;
+}
+.btn-track{
+    background:#ff1a66;
+    color:white;
+    border-radius:10px;
+}
+.btn-track:hover{
+    background:#e6005c;
+}
+</style>
+</head>
+
+<body>
+
+<div class="container py-5">
+
+<h2 class="mb-4 text-center" style="color:#ff1a66;">🧾 My Orders</h2>
+
+{% if orders %}
+    {% for order in orders %}
+    
+    <div class="order-card">
+
+        <div class="d-flex justify-content-between">
+            <div>
+                <strong>Order ID:</strong> #{{ order.id }} <br>
+                <strong>Date:</strong> {{ order.created_at }} <br>
+                <strong>Total:</strong> ₹{{ order.total_amount }} <br>
+                <strong>Payment:</strong> {{ order.payment_method }}
+            </div>
+
+            <div class="text-end">
+                <a href="{% url 'track_order' order.id %}" class="btn btn-track">
+                    Track Order 📦
+                </a>
+            
+                <a href="{% url 'download_invoice' order.id %}" class="btn btn-sm btn-success">
+                    Download Invoice 🧾
+                </a>
+            </div>    
+        </div>
+
+    </div>
+
+    {% endfor %}
+{% else %}
+
+<div class="alert alert-warning text-center">
+    No Orders Found 😢
+</div>
+
+{% endif %}
+
+</div>
+
+</body>
+</html>

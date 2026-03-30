@@ -1,0 +1,61 @@
+{% extends 'store/base.html' %}
+{% load static %}
+
+{% block content %}
+<div class="container py-5">
+  <div class="row justify-content-center">
+    
+    <!-- Contact Form -->
+    <div class="col-md-6 mb-4">
+      <div class="card shadow border-0">
+        <div class="card-body p-4">
+          <h3 class="text-center mb-3 fw-bold">Contact Us 💄</h3>
+          <p class="text-center text-muted">
+            Have questions about our beauty products? We’d love to hear from you.
+          </p>
+
+
+          <form method="POST">
+            {% csrf_token %}
+            <div class="mb-3">
+              <label class="form-label">Your Name</label>
+              <input type="text" name="name" class="form-control" required>
+            </div>
+
+            <div class="mb-3">
+              <label class="form-label">Email Address</label>
+              <input type="email" name="email" class="form-control" required>
+            </div>
+
+            <div class="mb-3">
+              <label class="form-label">Message</label>
+              <textarea name="message" rows="4" class="form-control" required></textarea>
+            </div>
+
+            <button type="submit" class="btn btn-dark w-100">Send Message</button>
+          </form>
+        </div>
+      </div>
+    </div>
+
+    <!-- Contact Details -->
+    <div class="col-md-4">
+      <div class="card shadow border-0 h-100">
+        <div class="card-body p-4">
+          <h4 class="fw-bold mb-3">Our Contact Details</h4>
+          <p class="mb-2"><strong>Email:</strong> <a href="mailto:anshikakumari1403@gmail.com">anshikakumari1403@gmail.com</a></p>
+          <p class="mb-2"><strong>Phone:</strong> <a href="tel:+9241780657">+91 9241780657</a></p>
+          <p class="mb-2"><strong>Address:</strong> road no 0, Keshari Nagar, patna,India</p>
+          
+          <hr>
+          <h5 class="fw-bold">Follow Us</h5>
+          <a href="#" class="me-2 text-decoration-none">Facebook</a>
+          <a href="#" class="me-2 text-decoration-none">Instagram</a>
+          <a href="#" class="text-decoration-none">Twitter</a>
+        </div>
+      </div>
+    </div>
+
+  </div>
+</div>
+{% endblock %}

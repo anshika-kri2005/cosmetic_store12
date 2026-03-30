@@ -1,0 +1,168 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<style>
+
+body{
+    font-family: Arial;
+    background:#f6f6f6;
+    padding:10px;
+    font-size:16px;   /* 🔥 BASE FONT INCREASE */
+}
+
+.invoice-box{
+    max-width:750px;
+    margin:auto;
+    background:white;
+    padding:25px;
+    border-radius:10px;
+}
+
+/* HEADER */
+.header{
+    display:flex;
+    justify-content:space-between;
+    align-items:center;
+    border-bottom:3px solid #ff1a66;
+    padding-bottom:10px;
+}
+
+.logo{
+    font-size:28px;   /* 🔥 BIGGER */
+    font-weight:bold;
+    color:#ff1a66;
+}
+
+.invoice-info{
+    text-align:right;
+    font-size:15px;
+}
+
+/* SECTION */
+.section{
+    margin-top:15px;  /* 🔥 REDUCED GAP */
+}
+
+.section h4{
+    margin-bottom:5px;
+    font-size:18px;
+    color:#ff1a66;
+}
+
+/* ADDRESS */
+.address-box{
+    background:#fff0f5;
+    padding:10px;
+    border-radius:8px;
+    font-size:15px;
+}
+
+/* TABLE */
+table{
+    width:100%;
+    border-collapse:collapse;
+    margin-top:10px;
+}
+
+th{
+    background:#ff1a66;
+    color:white;
+    padding:10px;
+    font-size:16px;   /* 🔥 BIGGER */
+}
+
+td{
+    padding:10px;
+    text-align:center;
+    border-bottom:1px solid #ddd;
+    font-size:15px;
+}
+
+/* TOTAL */
+.total-box{
+    text-align:right;
+    margin-top:10px;
+    font-size:20px;   /* 🔥 BIGGER */
+    font-weight:bold;
+}
+
+/* FOOTER */
+.footer{
+    text-align:center;
+    margin-top:15px;
+    font-size:14px;
+    color:#555;
+}
+
+</style>
+</head>
+
+<body>
+
+<div class="invoice-box">
+
+<!-- HEADER -->
+<div class="header">
+    <div class="logo">BeautyHub 💄</div>
+
+    <div class="invoice-info">
+        <strong>Invoice #{{ order.id }}</strong><br>
+        {{ order.created_at }}
+    </div>
+</div>
+
+<!-- CUSTOMER -->
+<div class="section">
+    <h4>Customer Details</h4>
+    <strong>{{ order.user.username }}</strong><br>
+    Payment: <strong>{{ order.payment_method|upper }}</strong>
+</div>
+
+<!-- ADDRESS -->
+<div class="section">
+    <h4>Shipping Address</h4>
+    <div class="address-box">
+        {{ order.address.full_name }} <br>
+        {{ order.address.house_no }}, {{ order.address.street }} <br>
+        {{ order.address.district }}, {{ order.address.state }} <br>
+        {{ order.address.pincode }}
+    </div>
+</div>
+
+<!-- TABLE -->
+<div class="section">
+    <h4>Order Summary</h4>
+
+    <table>
+        <tr>
+            <th>Product</th>
+            <th>Qty</th>
+            <th>Price</th>
+            <th>Total</th>
+        </tr>
+
+        {% for item in order.orderitem_set.all %}
+        <tr>
+            <td>{{ item.product.name }}</td>
+            <td>{{ item.quantity }}</td>
+            <td>₹{{ item.price }}</td>
+            <td>₹{{ item.total }}</td>
+        </tr>
+        {% endfor %}
+    </table>
+
+    <div class="total-box">
+        Total: ₹{{ order.total_amount }}
+    </div>
+</div>
+
+<!-- FOOTER -->
+<div class="footer">
+    Thank you for shopping with BeautyHub 💖
+</div>
+
+</div>
+
+</body>
+</html>
