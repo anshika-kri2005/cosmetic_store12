@@ -15,7 +15,6 @@ from django.http import HttpResponse
 from reportlab.platypus import SimpleDocTemplate,Table, Paragraph, Spacer
 from reportlab.lib.styles import getSampleStyleSheet
 from django.template.loader import get_template
-from xhtml2pdf import pisa
 from datetime import datetime
 import openpyxl
 from django.db.models import Sum, F, Count
