@@ -1,4 +1,5 @@
 from pathlib import Path
+import os
 
 # Build paths inside the project like this: BASE_DIR / 'subdir'.
 BASE_DIR = Path(__file__).resolve().parent.parent
@@ -6,7 +7,8 @@ BASE_DIR = Path(__file__).resolve().parent.parent
 STATIC_URL = '/static/'
 
 # Optional: if you want a project-level static folder
-STATICFILES_DIRS = [BASE_DIR / "static"]
+#STATICFILES_DIRS = [BASE_DIR / "static"]
+STATICFILES_DIRS = []
 
 
 
@@ -14,8 +16,8 @@ STATICFILES_DIRS = [BASE_DIR / "static"]
 # See https://docs.djangoproject.com/en/6.0/howto/deployment/checklist/
 
 # SECURITY WARNING: keep the secret key used in production secret!
-SECRET_KEY = 'django-insecure-3s(3(b9vnp25b-+f1init!8%2@e-0yx_g*p5b7zjk#nwx0&ypd'
-
+#SECRET_KEY = 'django-insecure-3s(3(b9vnp25b-+f1init!8%2@e-0yx_g*p5b7zjk#nwx0&ypd'
+SECRET_KEY = os.environ.get('(i5w*ie=yzsg0b5^8e!2iwjj04ebyfvn(@2%((_g2w#cy-o!p@')
 # SECURITY WARNING: don't run with debug turned on in production!
 DEBUG = True
 
@@ -94,8 +96,8 @@ EMAIL_HOST = 'smtp.gmail.com'
 EMAIL_PORT = 587
 EMAIL_USE_TLS = True
 
-EMAIL_HOST_USER = 'anshikakumari1403@gmail.com'
-EMAIL_HOST_PASSWORD = 'bibfooxpghqihwju'
+EMAIL_HOST_USER = os.environ.get('anshikakumari1403@gmail.com')
+EMAIL_HOST_PASSWORD = os.environ.get('bibfooxpghqihwju')
 
 
 # Password validation
@@ -132,8 +134,8 @@ USE_TZ = True
 # Static files (CSS, JavaScript, Images)
 # https://docs.djangoproject.com/en/6.0/howto/static-files/
 
-STATIC_URL = 'static/'
-
+#STATIC_URL = 'static/'
+STATIC_URL = '/static/'
 import os
 
 MEDIA_URL = '/media/'
