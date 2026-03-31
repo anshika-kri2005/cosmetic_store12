@@ -17,7 +17,7 @@ STATICFILES_DIRS = []
 
 # SECURITY WARNING: keep the secret key used in production secret!
 #SECRET_KEY = 'django-insecure-3s(3(b9vnp25b-+f1init!8%2@e-0yx_g*p5b7zjk#nwx0&ypd'
-SECRET_KEY = os.environ.get('(i5w*ie=yzsg0b5^8e!2iwjj04ebyfvn(@2%((_g2w#cy-o!p@','test123')
+SECRET_KEY = os.environ.get('SECRET_KEY','test123')
 # SECURITY WARNING: don't run with debug turned on in production!
 DEBUG = False
 
@@ -96,8 +96,8 @@ EMAIL_HOST = 'smtp.gmail.com'
 EMAIL_PORT = 587
 EMAIL_USE_TLS = True
 
-EMAIL_HOST_USER = os.environ.get('anshikakumari1403@gmail.com')
-EMAIL_HOST_PASSWORD = os.environ.get('bibfooxpghqihwju')
+EMAIL_HOST_USER = os.environ.get('EMAIL_HOST_USER')
+EMAIL_HOST_PASSWORD = os.environ.get('EMAIL_HOST_PASSWORD')
 
 
 # Password validation
