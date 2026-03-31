@@ -12,8 +12,6 @@ from .models import Cart,Order, OrderItem , ShippingAddress
 from django.http import JsonResponse
 import random
 from django.http import HttpResponse
-from reportlab.platypus import SimpleDocTemplate,Table, Paragraph, Spacer
-from reportlab.lib.styles import getSampleStyleSheet
 from django.template.loader import get_template
 from datetime import datetime
 import openpyxl
