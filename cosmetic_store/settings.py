@@ -19,7 +19,7 @@ STATICFILES_DIRS = []
 #SECRET_KEY = 'django-insecure-3s(3(b9vnp25b-+f1init!8%2@e-0yx_g*p5b7zjk#nwx0&ypd'
 SECRET_KEY = os.environ.get('SECRET_KEY','test123')
 # SECURITY WARNING: don't run with debug turned on in production!
-DEBUG = False
+DEBUG = os.environ.get('DEBUG', 'False').lower() == 'true'
 
 ALLOWED_HOSTS = ['*']
 
@@ -136,12 +136,13 @@ USE_TZ = True
 
 #STATIC_URL = 'static/'
 STATIC_URL = '/static/'
-import os
 
 MEDIA_URL = '/media/'
-#MEDIA_ROOT = os.path.join(BASE_DIR, 'media')
+MEDIA_ROOT = os.path.join(BASE_DIR, 'media')
 STATIC_ROOT = os.path.join(BASE_DIR, 'staticfiles')
 
 
 LOGIN_REDIRECT_URL = '/'
 LOGOUT_REDIRECT_URL = '/'
+DEFAULT_AUTO_FIELD = 'django.db.models.BigAutoField'
+SECURE_PROXY_SSL_HEADER = ('HTTP_X_FORWARDED_PROTO', 'https')
