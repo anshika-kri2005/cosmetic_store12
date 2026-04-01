@@ -5,6 +5,186 @@ from django.conf import settings
 from django.db import migrations, models
 
 
+def get_table_columns(schema_editor, table_name):
+    with schema_editor.connection.cursor() as cursor:
+        cursor.execute(f'PRAGMA table_info({table_name})')
+        return [row[1] for row in cursor.fetchall()]
+
+
+def table_exists(schema_editor, table_name):
+    return table_name in schema_editor.connection.introspection.table_names()
+
+
+def recreate_cart_table(schema_editor):
+    if not table_exists(schema_editor, 'store_cart'):
+        schema_editor.execute(
+            '''
+            CREATE TABLE store_cart (
+                id integer NOT NULL PRIMARY KEY AUTOINCREMENT,
+                quantity integer unsigned NOT NULL,
+                product_id bigint NOT NULL REFERENCES store_product (id) DEFERRABLE INITIALLY DEFERRED,
+                user_id integer NOT NULL REFERENCES auth_user (id) DEFERRABLE INITIALLY DEFERRED
+            )
+            '''
+        )
+        return
+
+    schema_editor.execute('ALTER TABLE store_cart RENAME TO store_cart_old')
+    schema_editor.execute(
+        '''
+        CREATE TABLE store_cart (
+            id integer NOT NULL PRIMARY KEY AUTOINCREMENT,
+            quantity integer unsigned NOT NULL,
+            product_id bigint NOT NULL REFERENCES store_product (id) DEFERRABLE INITIALLY DEFERRED,
+            user_id integer NOT NULL REFERENCES auth_user (id) DEFERRABLE INITIALLY DEFERRED
+        )
+        '''
+    )
+    schema_editor.execute(
+        '''
+        INSERT INTO store_cart (id, quantity, product_id, user_id)
+        SELECT id, quantity, product_id, user_id
+        FROM store_cart_old
+        '''
+    )
+    schema_editor.execute('DROP TABLE store_cart_old')
+
+
+def recreate_shippingaddress_table(schema_editor):
+    if table_exists(schema_editor, 'store_shippingaddress'):
+        schema_editor.execute('ALTER TABLE store_shippingaddress RENAME TO store_shippingaddress_old')
+    schema_editor.execute(
+        '''
+        CREATE TABLE store_shippingaddress (
+            id integer NOT NULL PRIMARY KEY AUTOINCREMENT,
+            full_name varchar(100) NOT NULL,
+            phone varchar(15) NOT NULL,
+            house_no varchar(100) NOT NULL,
+            street varchar(200) NOT NULL,
+            landmark varchar(200) NOT NULL,
+            pincode varchar(10) NOT NULL,
+            district varchar(100) NOT NULL,
+            state varchar(100) NOT NULL,
+            country varchar(100) NOT NULL,
+            latitude real NULL,
+            longitude real NULL,
+            user_id integer NOT NULL REFERENCES auth_user (id) DEFERRABLE INITIALLY DEFERRED
+        )
+        '''
+    )
+    if table_exists(schema_editor, 'store_shippingaddress_old'):
+        old_columns = set(get_table_columns(schema_editor, 'store_shippingaddress_old'))
+        required_columns = {
+            'id',
+            'full_name',
+            'phone',
+            'house_no',
+            'street',
+            'landmark',
+            'pincode',
+            'district',
+            'state',
+            'country',
+            'latitude',
+            'longitude',
+            'user_id',
+        }
+        if required_columns.issubset(old_columns):
+            schema_editor.execute(
+                '''
+                INSERT INTO store_shippingaddress (
+                    id, full_name, phone, house_no, street, landmark,
+                    pincode, district, state, country, latitude, longitude, user_id
+                )
+                SELECT
+                    id, full_name, phone, house_no, street, landmark,
+                    pincode, district, state, country, latitude, longitude, user_id
+                FROM store_shippingaddress_old
+                '''
+            )
+        schema_editor.execute('DROP TABLE store_shippingaddress_old')
+
+
+def recreate_order_table(schema_editor):
+    if table_exists(schema_editor, 'store_order'):
+        schema_editor.execute('DROP TABLE store_order')
+    schema_editor.execute(
+        '''
+        CREATE TABLE store_order (
+            id integer NOT NULL PRIMARY KEY AUTOINCREMENT,
+            total_amount decimal NOT NULL,
+            created_at datetime NOT NULL,
+            address_id bigint NOT NULL REFERENCES store_shippingaddress (id) DEFERRABLE INITIALLY DEFERRED,
+            user_id integer NOT NULL REFERENCES auth_user (id) DEFERRABLE INITIALLY DEFERRED
+        )
+        '''
+    )
+
+
+def ensure_orderitem_table(schema_editor):
+    if table_exists(schema_editor, 'store_orderitem'):
+        return
+    schema_editor.execute(
+        '''
+        CREATE TABLE store_orderitem (
+            id integer NOT NULL PRIMARY KEY AUTOINCREMENT,
+            quantity integer NOT NULL,
+            price decimal NOT NULL,
+            order_id bigint NOT NULL REFERENCES store_order (id) DEFERRABLE INITIALLY DEFERRED,
+            product_id bigint NOT NULL REFERENCES store_product (id) DEFERRABLE INITIALLY DEFERRED
+        )
+        '''
+    )
+
+
+def ensure_product_id_column(schema_editor):
+    if not table_exists(schema_editor, 'store_product'):
+        return
+
+    columns = set(get_table_columns(schema_editor, 'store_product'))
+    if 'product_id' in columns:
+        return
+
+    schema_editor.execute('ALTER TABLE store_product ADD COLUMN product_id varchar(20)')
+
+    with schema_editor.connection.cursor() as cursor:
+        cursor.execute('SELECT id FROM store_product ORDER BY id')
+        for index, (product_pk,) in enumerate(cursor.fetchall(), start=1):
+            cursor.execute(
+                'UPDATE store_product SET product_id = %s WHERE id = %s',
+                [f'P{index:03d}', product_pk],
+            )
+
+    schema_editor.execute(
+        'CREATE UNIQUE INDEX IF NOT EXISTS store_product_product_id_uniq ON store_product (product_id)'
+    )
+
+
+def repair_schema(apps, schema_editor):
+    tables = set(schema_editor.connection.introspection.table_names())
+    has_legacy_store_user = 'store_user' in tables
+
+    ensure_product_id_column(schema_editor)
+
+    if has_legacy_store_user:
+        recreate_cart_table(schema_editor)
+        recreate_shippingaddress_table(schema_editor)
+        recreate_order_table(schema_editor)
+        ensure_orderitem_table(schema_editor)
+        schema_editor.execute('DROP TABLE store_user')
+        return
+
+    if not table_exists(schema_editor, 'store_shippingaddress'):
+        recreate_shippingaddress_table(schema_editor)
+
+    order_columns = set(get_table_columns(schema_editor, 'store_order')) if table_exists(schema_editor, 'store_order') else set()
+    expected_order_columns = {'id', 'total_amount', 'created_at', 'address_id', 'user_id'}
+    if order_columns != expected_order_columns:
+        recreate_order_table(schema_editor)
+
+    ensure_orderitem_table(schema_editor)
+
+
 class Migration(migrations.Migration):
 
     dependencies = [
@@ -13,22 +193,29 @@ class Migration(migrations.Migration):
     ]
 
     operations = [
-        migrations.AlterField(
-            model_name='order',
-            name='user',
-            field=models.ForeignKey(on_delete=django.db.models.deletion.CASCADE, to=settings.AUTH_USER_MODEL),
-        ),
-        migrations.AlterField(
-            model_name='shippingaddress',
-            name='user',
-            field=models.ForeignKey(on_delete=django.db.models.deletion.CASCADE, to=settings.AUTH_USER_MODEL),
-        ),
-        migrations.AlterField(
-            model_name='cart',
-            name='user',
-            field=models.ForeignKey(on_delete=django.db.models.deletion.CASCADE, to=settings.AUTH_USER_MODEL),
-        ),
-        migrations.DeleteModel(
-            name='User',
+        migrations.SeparateDatabaseAndState(
+            database_operations=[
+                migrations.RunPython(repair_schema, migrations.RunPython.noop),
+            ],
+            state_operations=[
+                migrations.AlterField(
+                    model_name='order',
+                    name='user',
+                    field=models.ForeignKey(on_delete=django.db.models.deletion.CASCADE, to=settings.AUTH_USER_MODEL),
+                ),
+                migrations.AlterField(
+                    model_name='shippingaddress',
+                    name='user',
+                    field=models.ForeignKey(on_delete=django.db.models.deletion.CASCADE, to=settings.AUTH_USER_MODEL),
+                ),
+                migrations.AlterField(
+                    model_name='cart',
+                    name='user',
+                    field=models.ForeignKey(on_delete=django.db.models.deletion.CASCADE, to=settings.AUTH_USER_MODEL),
+                ),
+                migrations.DeleteModel(
+                    name='User',
+                ),
+            ],
         ),
     ]

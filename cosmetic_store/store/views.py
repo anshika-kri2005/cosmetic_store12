@@ -12,10 +12,7 @@ from .models import Cart,Order, OrderItem , ShippingAddress
 from django.http import JsonResponse
 import random
 from django.http import HttpResponse
-from reportlab.platypus import SimpleDocTemplate,Table, Paragraph, Spacer
-from reportlab.lib.styles import getSampleStyleSheet
 from django.template.loader import get_template
-from xhtml2pdf import pisa
 from datetime import datetime
 import openpyxl
 from django.db.models import Sum, F, Count
@@ -266,12 +263,20 @@ def contact_view(request):
         email = request.POST.get("email")
         message = request.POST.get("message")
 
-        send_mail(
-            subject=f"New Message from {name}",
-            message=message,
-            from_email=settings.EMAIL_HOST_USER,
-            recipient_list=[settings.EMAIL_HOST_USER],
-        )
+        if not settings.EMAIL_HOST_USER or not settings.EMAIL_HOST_PASSWORD:
+            messages.error(request, "Contact service is not configured right now.")
+            return redirect('contact')
+
+        try:
+            send_mail(
+                subject=f"New Message from {name}",
+                message=f"From: {name} <{email}>\n\n{message}",
+                from_email=settings.EMAIL_HOST_USER,
+                recipient_list=[settings.EMAIL_HOST_USER],
+            )
+        except Exception:
+            messages.error(request, "Message send nahi ho paya. Thodi der baad fir try kijiye.")
+            return redirect('contact')
 
         messages.success(request, "Message sent successfully!")
         return redirect('contact')
@@ -363,6 +368,11 @@ def my_orders(request):
     return render(request, 'store/my_orders.html', {'orders': orders})
 
 def download_invoice(request, order_id):
+    try:
+        from xhtml2pdf import pisa
+    except ImportError:
+        return HttpResponse("Invoice PDF feature is not available right now.", status=503)
+
     order = get_object_or_404(Order, id=order_id, user=request.user)
 
     template = get_template('store/invoice.html')
@@ -453,6 +463,11 @@ def export_excel(request):
 
 
 def export_pdf(request):
+    try:
+        from reportlab.platypus import SimpleDocTemplate, Table
+    except ImportError:
+        return HttpResponse("PDF export is not available right now.", status=503)
+
     response = HttpResponse(content_type='application/pdf')
     response['Content-Disposition'] = 'attachment; filename="report.pdf"'
 
