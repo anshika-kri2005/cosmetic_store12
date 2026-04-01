@@ -15,6 +15,7 @@ from django.http import HttpResponse
 from django.template.loader import get_template
 from datetime import datetime
 from django.db.models import Sum, F, Count
+from .models import Customer
 
 
 # =========================
@@ -62,6 +63,10 @@ def signup_view(request):
             messages.error(request, "Enter valid 10-digit phone number ❌")
             return redirect('signup')
 
+        if Customer.objects.filter(phone=phone).exclude(user__isnull=True).exists():
+            messages.error(request, "Phone number already registered ❌")
+            return redirect('signup')
+
         # ✅ Create user
         user = User.objects.create_user(
             username=username,
@@ -70,6 +75,13 @@ def signup_view(request):
         )
 
         user.save()
+        Customer.objects.create(
+            user=user,
+            name=username,
+            email=email,
+            phone=phone,
+            address='',
+        )
 
         messages.success(request, "Account created successfully ✅")
         return redirect('login')
@@ -239,6 +251,29 @@ def shipping_address(request):
 
             latitude=latitude,
             longitude=longitude,
+        )
+
+        Customer.objects.update_or_create(
+            user=request.user,
+            defaults={
+                'name': request.user.username,
+                'email': request.user.email,
+                'phone': request.POST['phone'],
+                'address': ", ".join(
+                    filter(
+                        None,
+                        [
+                            request.POST['house_no'],
+                            request.POST['street'],
+                            request.POST.get('landmark'),
+                            request.POST['district'],
+                            request.POST['state'],
+                            request.POST['country'],
+                            request.POST['pincode'],
+                        ],
+                    )
+                ),
+            },
         )
 
         return redirect('checkout') 

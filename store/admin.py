@@ -65,8 +65,8 @@ class ProductAdmin(admin.ModelAdmin):
 # ---------------- Customer ----------------
 @admin.register(Customer)
 class CustomerAdmin(admin.ModelAdmin):
-    list_display = ('name', 'phone', 'address')
-    search_fields = ('name', 'phone')
+    list_display = ('name', 'email', 'phone', 'user', 'address')
+    search_fields = ('name', 'email', 'phone', 'user__username', 'user__email')
 
 # ---------------- Shipping Address ----------------
 @admin.register(ShippingAddress)
@@ -76,9 +76,15 @@ class ShippingAddressAdmin(admin.ModelAdmin):
     search_fields = ('user__username', 'user__email', 'full_name', 'phone', 'pincode')
 
 # ---------------- Order ----------------
+class OrderItemInline(admin.TabularInline):
+    model = OrderItem
+    extra = 0
+    readonly_fields = ('product', 'quantity', 'price')
+
+
 @admin.register(Order)
 class OrderAdmin(admin.ModelAdmin):
-    list_display = ('id', 'user', 'status', 'total_amount', 'payment_method', 'created_at', 'address_summary', 'view_report')
+    list_display = ('id', 'user', 'item_summary', 'status', 'total_amount', 'payment_method', 'created_at', 'address_summary', 'view_report')
     
     list_editable = ('status',) 
     
@@ -86,6 +92,20 @@ class OrderAdmin(admin.ModelAdmin):
     search_fields = ('user__username', 'user__email', 'id', 'address__full_name', 'address__phone')
     actions = ['mark_as_shipped', 'mark_as_delivered']
     autocomplete_fields = ('user', 'address')
+    inlines = [OrderItemInline]
+
+    def get_queryset(self, request):
+        queryset = super().get_queryset(request)
+        return queryset.select_related('user', 'address').prefetch_related('orderitem_set__product')
+
+    def item_summary(self, obj):
+        items = [
+            f"{item.product.name} x{item.quantity}"
+            for item in obj.orderitem_set.all()
+        ]
+        return ", ".join(items) if items else "-"
+
+    item_summary.short_description = "Items"
 
     def address_summary(self, obj):
         return f"{obj.address.full_name}, {obj.address.district}"

@@ -42,12 +42,14 @@ phone_validator = RegexValidator(
     message="Phone number must be 10 digits"
 )
 class Customer(models.Model):
+    user = models.OneToOneField(User, on_delete=models.CASCADE, null=True, blank=True, related_name='customer_profile')
     name = models.CharField(max_length=100)
+    email = models.EmailField(blank=True)
     phone = models.CharField(max_length=10,validators = [phone_validator])
-    address = models.TextField()
+    address = models.TextField(blank=True)
 
     def __str__(self):
-        return self.name
+        return self.name or self.user.username
     
 class ShippingAddress(models.Model):
     user = models.ForeignKey(User, on_delete=models.CASCADE)
