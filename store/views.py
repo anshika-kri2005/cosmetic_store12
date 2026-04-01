@@ -14,7 +14,6 @@ import random
 from django.http import HttpResponse
 from django.template.loader import get_template
 from datetime import datetime
-import openpyxl
 from django.db.models import Sum, F, Count
 
 
@@ -212,6 +211,7 @@ def checkout(request, pk=None):
     })
 
 
+@login_required
 def shipping_address(request):
 
     if request.method == "POST":
@@ -319,9 +319,12 @@ def place_order(request):
         return redirect('cart_view')
 
     address = ShippingAddress.objects.filter(user=request.user).last()
+    if not address:
+        messages.error(request, "Order place karne se pehle shipping address add kijiye.")
+        return redirect('shipping_address')
 
     # ✅ get payment method
-    payment_method = request.POST.get('payment')
+    payment_method = request.POST.get('payment') or 'cod'
 
     # Create Order
     order = Order.objects.create(
@@ -430,6 +433,11 @@ def sales_report(request):
     return render(request, 'store/report.html', context)
 
 def export_excel(request):
+    try:
+        import openpyxl
+    except ImportError:
+        return HttpResponse("Excel export is not available right now.", status=503)
+
     wb = openpyxl.Workbook()
     ws = wb.active
     ws.title = "Sales Report"
@@ -442,15 +450,16 @@ def export_excel(request):
         revenue=Sum(F('quantity') * F('price'))
     )
 
-    total = 0
+    total = 0.0
 
     for item in data:
+        revenue = float(item['revenue'] or 0)
         ws.append([
             item['product__name'],
             item['sold'],
-            float(item['revenue'])
+            revenue
         ])
-        total += float(item['revenue'])
+        total += revenue
 
     ws.append([])
     ws.append(['Total Revenue', '', total])
@@ -480,12 +489,17 @@ def export_pdf(request):
         revenue=Sum(F('quantity') * F('price'))
     )
 
+    total_revenue = 0
     for item in data:
+        revenue = item['revenue'] or 0
+        total_revenue += revenue
         data_list.append([
             item['product__name'],
             item['sold'],
-            item['revenue']
+            revenue
         ])
+
+    data_list.append(['Total Revenue', '', total_revenue])
 
     table = Table(data_list)
     doc.build([table])

@@ -1,7 +1,25 @@
 from django import forms
-from .models import Address
+from django.contrib.auth.forms import AuthenticationForm
 
-class AddressForm(forms.ModelForm):
-    class Meta:
-        model = Address
-        fields = '__all__'
+
+class EmailOrUsernameAuthenticationForm(AuthenticationForm):
+    username = forms.CharField(
+        label="Username or Email",
+        widget=forms.TextInput(
+            attrs={
+                "class": "form-control",
+                "placeholder": "Enter username or email",
+                "autofocus": True,
+            }
+        ),
+    )
+    password = forms.CharField(
+        label="Password",
+        strip=False,
+        widget=forms.PasswordInput(
+            attrs={
+                "class": "form-control",
+                "placeholder": "Enter password",
+            }
+        ),
+    )

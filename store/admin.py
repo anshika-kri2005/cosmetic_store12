@@ -1,10 +1,46 @@
 from django.contrib import admin
+from django.contrib.auth.admin import UserAdmin
+from django.contrib.auth.models import User
 from django.utils.html import format_html
 from .models import Category, Product, Customer, Order, Cart, OrderItem, ShippingAddress
 from django.urls import path
 from django.shortcuts import render
 from django.db.models import Sum, F
 from django.template.response import TemplateResponse
+
+
+try:
+    admin.site.unregister(User)
+except admin.sites.NotRegistered:
+    pass
+
+
+@admin.register(User)
+class CustomUserAdmin(UserAdmin):
+    list_display = (
+        'username',
+        'email',
+        'first_name',
+        'last_name',
+        'is_staff',
+        'is_superuser',
+        'is_active',
+        'date_joined',
+        'address_count',
+        'order_count',
+    )
+    search_fields = ('username', 'email', 'first_name', 'last_name')
+
+    def address_count(self, obj):
+        return ShippingAddress.objects.filter(user=obj).count()
+
+    def order_count(self, obj):
+        return Order.objects.filter(user=obj).count()
+
+    address_count.short_description = 'Addresses'
+    order_count.short_description = 'Orders'
+
+
 # ---------------- Category ----------------
 @admin.register(Category)
 class CategoryAdmin(admin.ModelAdmin):
@@ -36,18 +72,25 @@ class CustomerAdmin(admin.ModelAdmin):
 @admin.register(ShippingAddress)
 class ShippingAddressAdmin(admin.ModelAdmin):
     list_display = ('user', 'full_name', 'phone', 'house_no', 'street', 'district', 'state', 'pincode')
-    search_fields = ('user__username', 'full_name', 'pincode')
+    list_filter = ('state', 'district')
+    search_fields = ('user__username', 'user__email', 'full_name', 'phone', 'pincode')
 
 # ---------------- Order ----------------
 @admin.register(Order)
 class OrderAdmin(admin.ModelAdmin):
-    list_display = ('id', 'user', 'status', 'total_amount', 'payment_method', 'created_at', 'view_report')
+    list_display = ('id', 'user', 'status', 'total_amount', 'payment_method', 'created_at', 'address_summary', 'view_report')
     
     list_editable = ('status',) 
     
     list_filter = ('status', 'payment_method', 'created_at')
-    search_fields = ('user__username', 'id')
+    search_fields = ('user__username', 'user__email', 'id', 'address__full_name', 'address__phone')
     actions = ['mark_as_shipped', 'mark_as_delivered']
+    autocomplete_fields = ('user', 'address')
+
+    def address_summary(self, obj):
+        return f"{obj.address.full_name}, {obj.address.district}"
+
+    address_summary.short_description = "Shipping"
 
     # 🔥 REPORT BUTTON
     def view_report(self, obj):
@@ -71,12 +114,19 @@ class OrderAdmin(admin.ModelAdmin):
 class CartAdmin(admin.ModelAdmin):
     list_display = ('user', 'product', 'quantity', 'total_price')
     list_filter = ('user',)
-    search_fields = ('user__username', 'product__name')
+    search_fields = ('user__username', 'user__email', 'product__name')
 
     # Calculate total price per cart item
     def total_price(self, obj):
         return obj.product.price * obj.quantity
     total_price.short_description = 'Total Price'
+
+
+@admin.register(OrderItem)
+class OrderItemAdmin(admin.ModelAdmin):
+    list_display = ('order', 'product', 'quantity', 'price')
+    list_filter = ('product',)
+    search_fields = ('order__id', 'product__name', 'order__user__username', 'order__user__email')
 
 
 
