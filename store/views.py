@@ -1,6 +1,7 @@
 import json
 import time
 from decimal import Decimal
+from io import BytesIO
 
 from django.conf import settings
 from django.contrib import messages
@@ -11,7 +12,6 @@ from django.db import transaction
 from django.db.models import F, Q, Sum
 from django.http import HttpResponse, JsonResponse
 from django.shortcuts import get_object_or_404, redirect, render
-from django.template.loader import get_template
 from django.urls import reverse
 from django.views.decorators.http import require_POST
 
@@ -710,20 +710,114 @@ def my_orders(request):
 @login_required
 def download_invoice(request, order_id):
     try:
-        from xhtml2pdf import pisa
+        from reportlab.lib import colors
+        from reportlab.lib.pagesizes import A4
+        from reportlab.lib.styles import getSampleStyleSheet
+        from reportlab.platypus import Paragraph, SimpleDocTemplate, Spacer, Table, TableStyle
     except ImportError:
         return HttpResponse("Invoice PDF feature is not available right now.", status=503)
 
-    order = get_object_or_404(Order, id=order_id, user=request.user)
-
-    template = get_template('store/invoice.html')
-    html = template.render({'order': order})
+    order = get_object_or_404(
+        Order.objects.select_related('address').prefetch_related('orderitem_set__product'),
+        id=order_id,
+        user=request.user,
+    )
+    order_items = list(order.orderitem_set.all())
 
     response = HttpResponse(content_type='application/pdf')
     response['Content-Disposition'] = f'attachment; filename="invoice_{order.id}.pdf"'
 
-    pisa.CreatePDF(html, dest=response)
+    styles = getSampleStyleSheet()
+    story = []
+    address = order.address
 
+    story.append(Paragraph("BeautyHub Invoice", styles['Title']))
+    story.append(Spacer(1, 12))
+    story.append(
+        Paragraph(
+            f"Invoice #{order.id}<br/>"
+            f"Date: {order.created_at.strftime('%d %b %Y, %I:%M %p')}<br/>"
+            f"Customer: {address.full_name}<br/>"
+            f"Payment: {order.get_payment_method_display()}<br/>"
+            f"Payment Status: {order.get_payment_status_display()}<br/>"
+            f"Order Status: {order.get_status_display()}",
+            styles['BodyText'],
+        )
+    )
+    story.append(Spacer(1, 14))
+
+    address_lines = [
+        address.house_no,
+        address.street,
+        address.landmark,
+        f"{address.district}, {address.state}",
+        f"{address.country} - {address.pincode}",
+        f"Phone: {address.phone}",
+    ]
+    address_text = "<br/>".join(line for line in address_lines if line)
+    story.append(Paragraph("Shipping Address", styles['Heading2']))
+    story.append(Paragraph(address_text, styles['BodyText']))
+    story.append(Spacer(1, 14))
+
+    table_data = [['Product', 'Qty', 'Unit Price', 'Line Total']]
+    for item in order_items:
+        line_total = Decimal(item.quantity) * item.price
+        table_data.append(
+            [
+                item.product.name,
+                str(item.quantity),
+                f"Rs. {Decimal(item.price):.2f}",
+                f"Rs. {line_total:.2f}",
+            ]
+        )
+
+    if len(table_data) == 1:
+        table_data.append(['No order items found', '-', '-', '-'])
+
+    items_table = Table(table_data, colWidths=[220, 60, 100, 100])
+    items_table.setStyle(
+        TableStyle(
+            [
+                ('BACKGROUND', (0, 0), (-1, 0), colors.HexColor('#ff1a66')),
+                ('TEXTCOLOR', (0, 0), (-1, 0), colors.white),
+                ('FONTNAME', (0, 0), (-1, 0), 'Helvetica-Bold'),
+                ('GRID', (0, 0), (-1, -1), 0.5, colors.HexColor('#f3b4c8')),
+                ('ROWBACKGROUNDS', (0, 1), (-1, -1), [colors.whitesmoke, colors.HexColor('#fff7fa')]),
+                ('ALIGN', (1, 1), (-1, -1), 'CENTER'),
+                ('VALIGN', (0, 0), (-1, -1), 'MIDDLE'),
+                ('BOTTOMPADDING', (0, 0), (-1, 0), 10),
+                ('TOPPADDING', (0, 0), (-1, 0), 10),
+            ]
+        )
+    )
+    story.append(items_table)
+    story.append(Spacer(1, 14))
+
+    summary_data = [
+        ['Subtotal', f"Rs. {order.total_amount:.2f}"],
+        ['Delivery', 'Free'],
+        ['Grand Total', f"Rs. {order.total_amount:.2f}"],
+    ]
+    summary_table = Table(summary_data, colWidths=[320, 160])
+    summary_table.setStyle(
+        TableStyle(
+            [
+                ('GRID', (0, 0), (-1, -1), 0.5, colors.HexColor('#f3b4c8')),
+                ('BACKGROUND', (0, -1), (-1, -1), colors.HexColor('#ffe3ec')),
+                ('FONTNAME', (0, -1), (-1, -1), 'Helvetica-Bold'),
+                ('ALIGN', (1, 0), (1, -1), 'RIGHT'),
+            ]
+        )
+    )
+    story.append(summary_table)
+    story.append(Spacer(1, 16))
+    story.append(Paragraph("Thank you for shopping with BeautyHub.", styles['BodyText']))
+
+    pdf_buffer = BytesIO()
+    document = SimpleDocTemplate(pdf_buffer, pagesize=A4, leftMargin=36, rightMargin=36, topMargin=36, bottomMargin=36)
+    document.build(story)
+    response.write(pdf_buffer.getvalue())
+    pdf_buffer.close()
     return response
 
 
