@@ -21,7 +21,20 @@ SECRET_KEY = os.environ.get('SECRET_KEY','test123')
 # SECURITY WARNING: don't run with debug turned on in production!
 DEBUG = os.environ.get('DEBUG', 'False').lower() == 'true'
 
-ALLOWED_HOSTS = ['*']
+allowed_hosts = os.environ.get('ALLOWED_HOSTS')
+ALLOWED_HOSTS = (
+    [host.strip() for host in allowed_hosts.split(',') if host.strip()]
+    if allowed_hosts
+    else ['*']
+)
+
+csrf_trusted_origins = os.environ.get('CSRF_TRUSTED_ORIGINS')
+if csrf_trusted_origins:
+    CSRF_TRUSTED_ORIGINS = [
+        origin.strip()
+        for origin in csrf_trusted_origins.split(',')
+        if origin.strip()
+    ]
 
 
 # Application definition
@@ -84,17 +97,35 @@ WSGI_APPLICATION = 'cosmetic_store.wsgi.application'
   #  }
 #}
 
+database_url = os.environ.get('DATABASE_URL')
 render_disk_path = os.environ.get('RENDER_DISK_PATH')
+sqlite_path = os.environ.get('SQLITE_PATH')
+
 default_sqlite_path = BASE_DIR / 'db.sqlite3'
 if render_disk_path:
     default_sqlite_path = Path(render_disk_path) / 'db.sqlite3'
+if sqlite_path:
+    default_sqlite_path = Path(sqlite_path)
 
 DATABASES = {
     'default': {
         'ENGINE': 'django.db.backends.sqlite3',
-        'NAME': os.environ.get('SQLITE_PATH', str(default_sqlite_path)),
+        'NAME': str(default_sqlite_path),
     }
 }
+
+if database_url:
+    try:
+        import dj_database_url
+    except ImportError:
+        dj_database_url = None
+
+    if dj_database_url is not None:
+        DATABASES['default'] = dj_database_url.parse(
+            database_url,
+            conn_max_age=int(os.environ.get('DB_CONN_MAX_AGE', '600')),
+            ssl_require=os.environ.get('DB_SSL_REQUIRE', 'true').lower() == 'true',
+        )
 
 EMAIL_BACKEND = 'django.core.mail.backends.smtp.EmailBackend'
 EMAIL_HOST = 'smtp.gmail.com'
@@ -152,7 +183,25 @@ LOGOUT_REDIRECT_URL = '/'
 DEFAULT_AUTO_FIELD = 'django.db.models.BigAutoField'
 SECURE_PROXY_SSL_HEADER = ('HTTP_X_FORWARDED_PROTO', 'https')
 
+production_security_enabled = (
+    not DEBUG
+    and os.environ.get(
+        'ENABLE_PRODUCTION_SECURITY',
+        os.environ.get('RENDER', 'false'),
+    ).lower() == 'true'
+)
+
+if production_security_enabled:
+    SECURE_SSL_REDIRECT = os.environ.get('SECURE_SSL_REDIRECT', 'true').lower() == 'true'
+    SESSION_COOKIE_SECURE = os.environ.get('SESSION_COOKIE_SECURE', 'true').lower() == 'true'
+    CSRF_COOKIE_SECURE = os.environ.get('CSRF_COOKIE_SECURE', 'true').lower() == 'true'
+    SECURE_HSTS_SECONDS = int(os.environ.get('SECURE_HSTS_SECONDS', '3600'))
+
 AUTHENTICATION_BACKENDS = [
     'store.auth_backends.EmailOrUsernameModelBackend',
     'django.contrib.auth.backends.ModelBackend',
 ]
+
+RAZORPAY_KEY_ID = os.environ.get('RAZORPAY_KEY_ID', '')
+RAZORPAY_KEY_SECRET = os.environ.get('RAZORPAY_KEY_SECRET', '')
+RAZORPAY_CURRENCY = os.environ.get('RAZORPAY_CURRENCY', 'INR')

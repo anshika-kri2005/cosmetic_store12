@@ -1,12 +1,22 @@
 from django.contrib import admin
 from django.contrib.auth.admin import UserAdmin
 from django.contrib.auth.models import User
-from django.utils.html import format_html
-from .models import Category, Product, Customer, Order, Cart, OrderItem, ShippingAddress
-from django.urls import path
-from django.shortcuts import render
-from django.db.models import Sum, F
+from django.db.models import F, Sum
 from django.template.response import TemplateResponse
+from django.urls import path
+from django.utils.html import format_html
+
+from .models import (
+    Cart,
+    Category,
+    Customer,
+    Order,
+    OrderItem,
+    Product,
+    Review,
+    ShippingAddress,
+    Wishlist,
+)
 
 
 try:
@@ -41,13 +51,12 @@ class CustomUserAdmin(UserAdmin):
     order_count.short_description = 'Orders'
 
 
-# ---------------- Category ----------------
 @admin.register(Category)
 class CategoryAdmin(admin.ModelAdmin):
     list_display = ('name', 'description')
     search_fields = ('name',)
 
-# ---------------- Product ----------------
+
 @admin.register(Product)
 class ProductAdmin(admin.ModelAdmin):
     list_display = ('product_id', 'name', 'brand', 'price', 'quantity', 'category', 'image_tag')
@@ -55,27 +64,27 @@ class ProductAdmin(admin.ModelAdmin):
     list_filter = ('category', 'brand')
     search_fields = ('name', 'brand', 'product_id')
 
-    # Show image preview
     def image_tag(self, obj):
         if obj.image:
             return format_html('<img src="{}" width="50" />', obj.image.url)
         return "-"
+
     image_tag.short_description = 'Image'
 
-# ---------------- Customer ----------------
+
 @admin.register(Customer)
 class CustomerAdmin(admin.ModelAdmin):
     list_display = ('name', 'email', 'phone', 'user', 'address')
     search_fields = ('name', 'email', 'phone', 'user__username', 'user__email')
 
-# ---------------- Shipping Address ----------------
+
 @admin.register(ShippingAddress)
 class ShippingAddressAdmin(admin.ModelAdmin):
-    list_display = ('user', 'full_name', 'phone', 'house_no', 'street', 'district', 'state', 'pincode')
+    list_display = ('user', 'full_name', 'phone', 'house_no', 'landmark', 'street', 'district', 'state', 'pincode')
     list_filter = ('state', 'district')
     search_fields = ('user__username', 'user__email', 'full_name', 'phone', 'pincode')
 
-# ---------------- Order ----------------
+
 class OrderItemInline(admin.TabularInline):
     model = OrderItem
     extra = 0
@@ -84,12 +93,29 @@ class OrderItemInline(admin.TabularInline):
 
 @admin.register(Order)
 class OrderAdmin(admin.ModelAdmin):
-    list_display = ('id', 'user', 'item_summary', 'status', 'total_amount', 'payment_method', 'created_at', 'address_summary', 'view_report')
-    
-    list_editable = ('status',) 
-    
-    list_filter = ('status', 'payment_method', 'created_at')
-    search_fields = ('user__username', 'user__email', 'id', 'address__full_name', 'address__phone')
+    list_display = (
+        'id',
+        'user',
+        'item_summary',
+        'status',
+        'total_amount',
+        'payment_method',
+        'payment_status',
+        'created_at',
+        'address_summary',
+        'view_report',
+    )
+    list_editable = ('status',)
+    list_filter = ('status', 'payment_method', 'payment_status', 'created_at')
+    search_fields = (
+        'user__username',
+        'user__email',
+        'id',
+        'address__full_name',
+        'address__phone',
+        'razorpay_order_id',
+        'razorpay_payment_id',
+    )
     actions = ['mark_as_shipped', 'mark_as_delivered']
     autocomplete_fields = ('user', 'address')
     inlines = [OrderItemInline]
@@ -112,34 +138,46 @@ class OrderAdmin(admin.ModelAdmin):
 
     address_summary.short_description = "Shipping"
 
-    # 🔥 REPORT BUTTON
     def view_report(self, obj):
         return format_html(
             '<a class="button" href="/report/" target="_blank">View Report</a>'
         )
+
     view_report.short_description = "Report"
 
-    # Quick action: mark selected orders as shipped
     def mark_as_shipped(self, request, queryset):
         queryset.update(status='shipped')
+
     mark_as_shipped.short_description = "Mark selected orders as shipped"
 
-    # Quick action: mark selected orders as delivered
     def mark_as_delivered(self, request, queryset):
         queryset.update(status='delivered')
+
     mark_as_delivered.short_description = "Mark selected orders as delivered"
 
-# ---------------- Cart ----------------
+
 @admin.register(Cart)
 class CartAdmin(admin.ModelAdmin):
     list_display = ('user', 'product', 'quantity', 'total_price')
     list_filter = ('user',)
     search_fields = ('user__username', 'user__email', 'product__name')
 
-    # Calculate total price per cart item
     def total_price(self, obj):
         return obj.product.price * obj.quantity
+
     total_price.short_description = 'Total Price'
+
+
+@admin.register(Wishlist)
+class WishlistAdmin(admin.ModelAdmin):
+    list_display = ('user', 'product', 'added_at')
+
+
+@admin.register(Review)
+class ReviewAdmin(admin.ModelAdmin):
+    list_display = ('user', 'product', 'rating', 'created_at')
+    list_filter = ('rating', 'created_at')
+    search_fields = ('user__username', 'product__name', 'comment')
 
 
 @admin.register(OrderItem)
@@ -147,7 +185,6 @@ class OrderItemAdmin(admin.ModelAdmin):
     list_display = ('order', 'product', 'quantity', 'price')
     list_filter = ('product',)
     search_fields = ('order__id', 'product__name', 'order__user__username', 'order__user__email')
-
 
 
 class CustomAdminSite(admin.AdminSite):
@@ -163,7 +200,7 @@ class CustomAdminSite(admin.AdminSite):
     def report_view(self, request):
         data = OrderItem.objects.values('product__name').annotate(
             sold=Sum('quantity'),
-            revenue=Sum(F('quantity') * F('price'))
+            revenue=Sum(F('quantity') * F('price')),
         )
 
         products = Product.objects.all()
@@ -171,11 +208,10 @@ class CustomAdminSite(admin.AdminSite):
         context = dict(
             self.each_context(request),
             data=data,
-            products=products
+            products=products,
         )
 
         return TemplateResponse(request, "store/report.html", context)
 
-# ✅ IMPORTANT
-admin_site = CustomAdminSite(name='custom_admin')
 
+admin_site = CustomAdminSite(name='custom_admin')

@@ -1,80 +1,229 @@
-from django.shortcuts import render, redirect, get_object_or_404
-from django.contrib.auth.forms import UserCreationForm
-from django.contrib import messages
-from django.db.models import Q
-from .models import Product, Category
-from django.contrib.auth.models import User
-from django.contrib.auth.decorators import login_required
-from django.contrib.auth import logout
-from django.core.mail import send_mail
+import json
+import time
+from decimal import Decimal
+
 from django.conf import settings
-from .models import Cart,Order, OrderItem , ShippingAddress
-from django.http import JsonResponse
-import random
-from django.http import HttpResponse
+from django.contrib import messages
+from django.contrib.auth import logout
+from django.contrib.auth.decorators import login_required
+from django.contrib.auth.models import User
+from django.db import transaction
+from django.db.models import F, Q, Sum
+from django.http import HttpResponse, JsonResponse
+from django.shortcuts import get_object_or_404, redirect, render
 from django.template.loader import get_template
-from datetime import datetime
-from django.db.models import Sum, F, Count
-from .models import Customer
+from django.urls import reverse
+from django.views.decorators.http import require_POST
+
+from .models import Cart, Category, Customer, Order, OrderItem, Product, ShippingAddress
 
 
-# =========================
-# SIGNUP
-# =========================
+CHECKOUT_SESSION_KEY = 'checkout_state'
+PENDING_RAZORPAY_SESSION_KEY = 'pending_razorpay_payment'
+
+
+def _decimal_amount(value):
+    return Decimal(str(value)).quantize(Decimal('0.01'))
+
+
+def _build_checkout_item(product, quantity):
+    unit_price = _decimal_amount(product.price)
+    return {
+        'product': product,
+        'quantity': quantity,
+        'unit_price': unit_price,
+        'total_price': unit_price * quantity,
+    }
+
+
+def _set_checkout_state(request, source, product_id=None):
+    checkout_state = {'source': source}
+    if product_id:
+        checkout_state['product_id'] = product_id
+
+    request.session[CHECKOUT_SESSION_KEY] = checkout_state
+    request.session.pop(PENDING_RAZORPAY_SESSION_KEY, None)
+    request.session.modified = True
+
+
+def _clear_checkout_state(request):
+    request.session.pop(CHECKOUT_SESSION_KEY, None)
+    request.session.pop(PENDING_RAZORPAY_SESSION_KEY, None)
+    request.session.modified = True
+
+
+def _get_checkout_context(request):
+    checkout_state = request.session.get(CHECKOUT_SESSION_KEY, {})
+    checkout_source = checkout_state.get('source')
+
+    if checkout_source == 'direct' and checkout_state.get('product_id'):
+        product = Product.objects.filter(id=checkout_state['product_id']).first()
+        if not product:
+            _clear_checkout_state(request)
+            return None
+
+        items = [_build_checkout_item(product, 1)]
+        return {
+            'source': 'direct',
+            'items': items,
+            'total_amount': items[0]['total_price'],
+        }
+
+    cart_items = list(Cart.objects.filter(user=request.user).select_related('product'))
+    if not cart_items:
+        if checkout_source == 'cart':
+            _clear_checkout_state(request)
+        return None
+
+    items = [_build_checkout_item(item.product, item.quantity) for item in cart_items]
+    return {
+        'source': 'cart',
+        'items': items,
+        'total_amount': sum((item['total_price'] for item in items), Decimal('0.00')),
+    }
+
+
+def _serialize_checkout_items(items):
+    return [
+        {
+            'product_id': item['product'].id,
+            'quantity': item['quantity'],
+            'unit_price': str(item['unit_price']),
+        }
+        for item in items
+    ]
+
+
+def _deserialize_checkout_items(serialized_items):
+    product_ids = [item['product_id'] for item in serialized_items]
+    products = Product.objects.in_bulk(product_ids)
+    deserialized_items = []
+
+    for item in serialized_items:
+        product = products.get(item['product_id'])
+        if not product:
+            raise ValueError("One of the checkout products no longer exists.")
+
+        quantity = int(item['quantity'])
+        unit_price = _decimal_amount(item['unit_price'])
+        deserialized_items.append(
+            {
+                'product': product,
+                'quantity': quantity,
+                'unit_price': unit_price,
+                'total_price': unit_price * quantity,
+            }
+        )
+
+    return deserialized_items
+
+
+def _get_default_address(user):
+    return ShippingAddress.objects.filter(user=user).order_by('-id').first()
+
+
+def get_razorpay_client():
+    if not settings.RAZORPAY_KEY_ID or not settings.RAZORPAY_KEY_SECRET:
+        return None
+
+    try:
+        import razorpay
+    except ImportError:
+        return None
+
+    return razorpay.Client(auth=(settings.RAZORPAY_KEY_ID, settings.RAZORPAY_KEY_SECRET))
+
+
+def _create_order_from_items(
+    *,
+    user,
+    address,
+    items,
+    payment_method,
+    payment_status='pending',
+    clear_cart=False,
+    razorpay_order_id='',
+    razorpay_payment_id='',
+    razorpay_signature='',
+):
+    total_amount = sum((item['total_price'] for item in items), Decimal('0.00'))
+
+    with transaction.atomic():
+        order = Order.objects.create(
+            user=user,
+            address=address,
+            total_amount=total_amount,
+            payment_method=payment_method,
+            payment_status=payment_status,
+            razorpay_order_id=razorpay_order_id,
+            razorpay_payment_id=razorpay_payment_id,
+            razorpay_signature=razorpay_signature,
+        )
+
+        OrderItem.objects.bulk_create(
+            [
+                OrderItem(
+                    order=order,
+                    product=item['product'],
+                    quantity=item['quantity'],
+                    price=item['unit_price'],
+                )
+                for item in items
+            ]
+        )
+
+        if clear_cart:
+            Cart.objects.filter(user=user).delete()
+
+    return order
+
+
 @login_required
 def profile(request):
     addresses = ShippingAddress.objects.filter(user=request.user)
 
     context = {
         'user': request.user,
-        'addresses': addresses
+        'addresses': addresses,
     }
 
     return render(request, 'store/profile.html', context)
 
 
 def signup_view(request):
-
     if request.method == "POST":
-
         username = request.POST.get('username')
-        email = request.POST.get('email')   # ✅ NEW
+        email = request.POST.get('email')
         phone = request.POST.get('phone')
         password1 = request.POST.get('password1')
         password2 = request.POST.get('password2')
 
-        # 🔐 Password match check
         if password1 != password2:
-            messages.error(request, "Passwords do not match ❌")
+            messages.error(request, "Passwords do not match.")
             return redirect('signup')
 
-        # 👤 Username exists
         if User.objects.filter(username=username).exists():
-            messages.error(request, "Username already exists ❌")
+            messages.error(request, "Username already exists.")
             return redirect('signup')
 
-        # 📧 Email exists (IMPORTANT)
         if User.objects.filter(email=email).exists():
-            messages.error(request, "Email already registered ❌")
+            messages.error(request, "Email already registered.")
             return redirect('signup')
 
-        # 📱 Phone validation (10 digits)
         if not phone.isdigit() or len(phone) != 10:
-            messages.error(request, "Enter valid 10-digit phone number ❌")
+            messages.error(request, "Enter a valid 10-digit phone number.")
             return redirect('signup')
 
         if Customer.objects.filter(phone=phone).exclude(user__isnull=True).exists():
-            messages.error(request, "Phone number already registered ❌")
+            messages.error(request, "Phone number already registered.")
             return redirect('signup')
 
-        # ✅ Create user
         user = User.objects.create_user(
             username=username,
-            email=email,   # ✅ SAVE EMAIL
-            password=password1
+            email=email,
+            password=password1,
         )
 
-        user.save()
         Customer.objects.create(
             user=user,
             name=username,
@@ -83,22 +232,16 @@ def signup_view(request):
             address='',
         )
 
-        messages.success(request, "Account created successfully ✅")
+        messages.success(request, "Account created successfully.")
         return redirect('login')
 
     return render(request, "store/signup.html")
-
-
-# =========================
-# HOME PAGE
-# =========================
 
 
 def home(request):
     query = request.GET.get('q')
 
     products = Product.objects.all()
-
     if query:
         products = products.filter(
             Q(name__icontains=query) |
@@ -106,7 +249,6 @@ def home(request):
         )
 
     categories = Category.objects.all()
-
     cart_items_count = 0
 
     if request.user.is_authenticated:
@@ -116,23 +258,20 @@ def home(request):
         'products': products,
         'categories': categories,
         'cart_items_count': cart_items_count,
-        'query': query,   # 🔥 important
-        'page': 'home'
+        'query': query,
+        'page': 'home',
     }
 
     return render(request, 'store/index.html', context)
 
 
-# =========================
-# ADD TO CART
-# =========================
 @login_required
 def add_to_cart(request, product_id):
     product = get_object_or_404(Product, id=product_id)
 
     cart_item, created = Cart.objects.get_or_create(
         user=request.user,
-        product=product
+        product=product,
     )
 
     if created:
@@ -141,16 +280,21 @@ def add_to_cart(request, product_id):
         cart_item.quantity += 1
 
     cart_item.save()
-    messages.success(request, f"{product.name} added to cart")
-
+    messages.success(request, f"{product.name} added to cart.")
     return redirect('cart_view')
 
-# =========================
-# PRODUCT DETAIL
-# =========================
-def product_detail(request, pk):   # 👈 pk MUST be here
+
+def product_detail(request, pk):
     product = get_object_or_404(Product, pk=pk)
-    return render(request, 'store/product_detail.html', {'product': product})
+    related_products = Product.objects.filter(category=product.category).exclude(pk=product.pk)[:4]
+    return render(
+        request,
+        'store/product_detail.html',
+        {
+            'product': product,
+            'related_products': related_products,
+        },
+    )
 
 
 def category_products(request, category_id):
@@ -161,73 +305,56 @@ def category_products(request, category_id):
     return render(request, 'store/index.html', {
         'products': products,
         'categories': categories,
-        'selected_category': category
+        'selected_category': category,
     })
 
 
-# =========================
-# CART VIEW
-# =========================
 @login_required
 def cart_view(request):
-    cart_items = Cart.objects.filter(user=request.user)
-
-    total = sum(item.total_price() for item in cart_items)
+    cart_items = Cart.objects.filter(user=request.user).select_related('product')
+    total = sum((_decimal_amount(item.product.price) * item.quantity for item in cart_items), Decimal('0.00'))
 
     context = {
         'cart_items': cart_items,
-        'total': total
+        'total': total,
     }
     return render(request, 'store/cart.html', context)
 
 
 @login_required
 def buy_now(request, pk):
-    return redirect('checkout', pk=pk)
+    return redirect('checkout_direct', pk=pk)
 
 
 @login_required
 def checkout(request, pk=None):
-
-    # Direct Buy
     if pk:
-        product = get_object_or_404(Product, id=pk)
-        cart_items = [{
-            'product': product,
-            'quantity': 1,
-            'total_price': product.price
-        }]
-
-    # From Cart
+        get_object_or_404(Product, id=pk)
+        _set_checkout_state(request, 'direct', product_id=pk)
     else:
-        cart = Cart.objects.filter(user=request.user)
-
-        if not cart.exists():
+        if not Cart.objects.filter(user=request.user).exists():
+            _clear_checkout_state(request)
             return redirect('cart_view')
+        _set_checkout_state(request, 'cart')
 
-        cart_items = []
-        for item in cart:
-            cart_items.append({
-                'product': item.product,
-                'quantity': item.quantity,
-                'total_price': item.product.price * item.quantity
-            })
+    checkout_context = _get_checkout_context(request)
+    if not checkout_context:
+        messages.error(request, "Your checkout session could not be prepared.")
+        return redirect('cart_view')
 
-    address = ShippingAddress.objects.filter(user=request.user).last()
-    total_amount = sum(item['total_price'] for item in cart_items)
+    address = _get_default_address(request.user)
 
     return render(request, 'store/checkout.html', {
-        'cart_items': cart_items,
-        'total_amount': total_amount,
-        'address': address   # ← THIS WAS MISSING
+        'cart_items': checkout_context['items'],
+        'total_amount': checkout_context['total_amount'],
+        'address': address,
+        'razorpay_enabled': bool(settings.RAZORPAY_KEY_ID and settings.RAZORPAY_KEY_SECRET),
     })
 
 
 @login_required
 def shipping_address(request):
-
     if request.method == "POST":
-
         latitude = request.POST.get('latitude')
         longitude = request.POST.get('longitude')
 
@@ -236,19 +363,15 @@ def shipping_address(request):
 
         ShippingAddress.objects.create(
             user=request.user,
-
             full_name=request.POST['full_name'],
             phone=request.POST['phone'],
-
             house_no=request.POST['house_no'],
             street=request.POST['street'],
             landmark=request.POST.get('landmark'),
-
             pincode=request.POST['pincode'],
             district=request.POST['district'],
             state=request.POST['state'],
             country=request.POST['country'],
-
             latitude=latitude,
             longitude=longitude,
         )
@@ -276,24 +399,19 @@ def shipping_address(request):
             },
         )
 
-        return redirect('checkout') 
+        return redirect('checkout')
 
     return render(request, 'store/shipping_address.html')
 
 
-
-# =========================
-# LOGOUT
-# =========================
 def logout_view(request):
     logout(request)
     messages.success(request, "You have logged out successfully.")
     return redirect('home')
 
+
 def contact_view(request):
-
     if request.method == "POST":
-
         name = request.POST.get("name")
         email = request.POST.get("email")
         message = request.POST.get("message")
@@ -303,6 +421,8 @@ def contact_view(request):
             return redirect('contact')
 
         try:
+            from django.core.mail import send_mail
+
             send_mail(
                 subject=f"New Message from {name}",
                 message=f"From: {name} <{email}>\n\n{message}",
@@ -318,9 +438,16 @@ def contact_view(request):
 
     return render(request, 'store/contact.html')
 
+
+@login_required
 def remove_from_cart(request, item_id):
-    item = Cart.objects.get(id=item_id)
+    item = get_object_or_404(Cart, id=item_id, user=request.user)
     item.delete()
+
+    if not Cart.objects.filter(user=request.user).exists():
+        request.session.pop(CHECKOUT_SESSION_KEY, None)
+        request.session.modified = True
+
     return redirect('cart_view')
 
 
@@ -340,71 +467,247 @@ def decrease_quantity(request, item_id):
         cart_item.quantity -= 1
         cart_item.save()
     else:
-        cart_item.delete()   # agar 1 tha to remove kar do
+        cart_item.delete()
+
+    if not Cart.objects.filter(user=request.user).exists():
+        request.session.pop(CHECKOUT_SESSION_KEY, None)
+        request.session.modified = True
 
     return redirect('cart_view')
 
 
 @login_required
+@require_POST
 def place_order(request):
-
-    cart_items = Cart.objects.filter(user=request.user)
-
-    if not cart_items.exists():
+    checkout_context = _get_checkout_context(request)
+    if not checkout_context:
+        messages.error(request, "Your checkout is empty.")
         return redirect('cart_view')
 
-    address = ShippingAddress.objects.filter(user=request.user).last()
+    address = _get_default_address(request.user)
     if not address:
         messages.error(request, "Order place karne se pehle shipping address add kijiye.")
         return redirect('shipping_address')
 
-    # ✅ get payment method
     payment_method = request.POST.get('payment') or 'cod'
+    if payment_method == 'razorpay':
+        messages.error(request, "Please use Pay Now to complete Razorpay payment.")
+        return redirect('checkout')
 
-    # Create Order
-    order = Order.objects.create(
+    order = _create_order_from_items(
         user=request.user,
         address=address,
-        total_amount=0,
-        payment_method=payment_method   # ✅ SAVE HERE
+        items=checkout_context['items'],
+        payment_method='cod',
+        payment_status='pending',
+        clear_cart=checkout_context['source'] == 'cart',
+    )
+    _clear_checkout_state(request)
+
+    return redirect('order_success', order_id=order.id)
+
+
+@login_required
+@require_POST
+def create_razorpay_order(request):
+    address = _get_default_address(request.user)
+    if not address:
+        return JsonResponse(
+            {'message': 'Please add a shipping address before paying.'},
+            status=400,
+        )
+
+    checkout_context = _get_checkout_context(request)
+    if not checkout_context:
+        return JsonResponse({'message': 'Your checkout is empty.'}, status=400)
+
+    client = get_razorpay_client()
+    if client is None:
+        return JsonResponse(
+            {'message': 'Razorpay is not configured on the server yet.'},
+            status=503,
+        )
+
+    amount = checkout_context['total_amount']
+    amount_in_paise = int((amount * 100).quantize(Decimal('1')))
+    receipt = f"beautyhub_{request.user.id}_{int(time.time())}"[:40]
+
+    try:
+        razorpay_order = client.order.create(
+            data={
+                'amount': amount_in_paise,
+                'currency': settings.RAZORPAY_CURRENCY,
+                'receipt': receipt,
+                'notes': {
+                    'user_id': str(request.user.id),
+                    'checkout_source': checkout_context['source'],
+                },
+            }
+        )
+    except Exception:
+        return JsonResponse(
+            {'message': 'Unable to start Razorpay payment right now.'},
+            status=502,
+        )
+
+    customer = getattr(request.user, 'customer_profile', None)
+
+    request.session[PENDING_RAZORPAY_SESSION_KEY] = {
+        'razorpay_order_id': razorpay_order['id'],
+        'source': checkout_context['source'],
+        'address_id': address.id,
+        'items': _serialize_checkout_items(checkout_context['items']),
+        'amount_in_paise': amount_in_paise,
+    }
+    request.session.modified = True
+
+    return JsonResponse(
+        {
+            'key': settings.RAZORPAY_KEY_ID,
+            'amount': amount_in_paise,
+            'currency': settings.RAZORPAY_CURRENCY,
+            'order_id': razorpay_order['id'],
+            'name': 'BeautyHub',
+            'description': 'Secure checkout payment',
+            'prefill': {
+                'name': address.full_name,
+                'email': request.user.email or getattr(customer, 'email', ''),
+                'contact': address.phone or getattr(customer, 'phone', ''),
+            },
+            'theme': {'color': '#ff1a66'},
+        }
     )
 
-    total = 0
 
-    # Create Order Items
-    for item in cart_items:
-        OrderItem.objects.create(
-            order=order,
-            product=item.product,
-            quantity=item.quantity,
-            price=item.product.price
+@login_required
+@require_POST
+def verify_razorpay_payment(request):
+    pending_payment = request.session.get(PENDING_RAZORPAY_SESSION_KEY)
+    if not pending_payment:
+        return JsonResponse(
+            {'success': False, 'message': 'Payment session expired. Please try again.'},
+            status=400,
         )
-        total += item.product.price * item.quantity
 
-    order.total_amount = total
-    order.save()
+    client = get_razorpay_client()
+    if client is None:
+        return JsonResponse(
+            {'success': False, 'message': 'Razorpay is not configured on the server yet.'},
+            status=503,
+        )
 
-    cart_items.delete()
-    print("Order created:", order.id)
+    try:
+        payload = json.loads(request.body or '{}')
+    except json.JSONDecodeError:
+        return JsonResponse(
+            {'success': False, 'message': 'Invalid payment verification payload.'},
+            status=400,
+        )
 
-    return redirect('order_success',order_id=order.id)
+    signature_payload = {
+        'razorpay_order_id': payload.get('razorpay_order_id'),
+        'razorpay_payment_id': payload.get('razorpay_payment_id'),
+        'razorpay_signature': payload.get('razorpay_signature'),
+    }
+
+    if not all(signature_payload.values()):
+        return JsonResponse(
+            {'success': False, 'message': 'Missing Razorpay payment details.'},
+            status=400,
+        )
+
+    if signature_payload['razorpay_order_id'] != pending_payment['razorpay_order_id']:
+        return JsonResponse(
+            {'success': False, 'message': 'Payment order mismatch detected.'},
+            status=400,
+        )
+
+    try:
+        client.utility.verify_payment_signature(signature_payload)
+        payment_data = client.payment.fetch(signature_payload['razorpay_payment_id'])
+    except Exception:
+        return JsonResponse(
+            {
+                'success': False,
+                'message': 'Payment verification failed. Please check the payment in Razorpay before retrying.',
+            },
+            status=400,
+        )
+
+    payment_status = payment_data.get('status')
+    if payment_status not in {'authorized', 'captured'}:
+        return JsonResponse(
+            {'success': False, 'message': 'Payment was not completed successfully.'},
+            status=400,
+        )
+
+    if payment_data.get('order_id') != pending_payment['razorpay_order_id']:
+        return JsonResponse(
+            {'success': False, 'message': 'Payment does not belong to this order.'},
+            status=400,
+        )
+
+    if int(payment_data.get('amount', 0)) != pending_payment['amount_in_paise']:
+        return JsonResponse(
+            {'success': False, 'message': 'Payment amount mismatch detected.'},
+            status=400,
+        )
+
+    try:
+        items = _deserialize_checkout_items(pending_payment['items'])
+    except ValueError as exc:
+        return JsonResponse({'success': False, 'message': str(exc)}, status=400)
+
+    address = get_object_or_404(
+        ShippingAddress,
+        id=pending_payment['address_id'],
+        user=request.user,
+    )
+
+    order = _create_order_from_items(
+        user=request.user,
+        address=address,
+        items=items,
+        payment_method='razorpay',
+        payment_status='paid' if payment_status == 'captured' else 'authorized',
+        clear_cart=pending_payment['source'] == 'cart',
+        razorpay_order_id=signature_payload['razorpay_order_id'],
+        razorpay_payment_id=signature_payload['razorpay_payment_id'],
+        razorpay_signature=signature_payload['razorpay_signature'],
+    )
+    _clear_checkout_state(request)
+
+    return JsonResponse(
+        {
+            'success': True,
+            'redirect_url': reverse('order_success', kwargs={'order_id': order.id}),
+        }
+    )
+
 
 def payment(request):
     return render(request, 'store/payment.html')
 
+
+@login_required
 def order_success(request, order_id):
-    order = get_object_or_404(Order, id=order_id)
+    order = get_object_or_404(Order, id=order_id, user=request.user)
     return render(request, 'store/order_success.html', {'order': order})
-    
+
+
+@login_required
 def track_order(request, order_id):
     order = get_object_or_404(Order, id=order_id, user=request.user)
     return render(request, 'store/track_order.html', {'order': order})
+
 
 @login_required
 def my_orders(request):
     orders = Order.objects.filter(user=request.user).order_by('-id')
     return render(request, 'store/my_orders.html', {'orders': orders})
 
+
+@login_required
 def download_invoice(request, order_id):
     try:
         from xhtml2pdf import pisa
@@ -424,35 +727,17 @@ def download_invoice(request, order_id):
     return response
 
 
-
 def sales_report(request):
-
-    #Product-wise sales
     data = OrderItem.objects.values('product__name').annotate(
         sold=Sum('quantity'),
-        revenue=Sum(F('quantity') * F('price'))
+        revenue=Sum(F('quantity') * F('price')),
     )
 
-    #Total sold items
-    total_sold = OrderItem.objects.aggregate(
-        total=Sum('quantity')
-    )['total'] or 0
-
-    #Total revenue
-    total_revenue = OrderItem.objects.aggregate(
-        total=Sum(F('quantity') * F('price'))
-    )['total'] or 0
-
-    #Total orders
+    total_sold = OrderItem.objects.aggregate(total=Sum('quantity'))['total'] or 0
+    total_revenue = OrderItem.objects.aggregate(total=Sum(F('quantity') * F('price')))['total'] or 0
     total_orders = Order.objects.count()
-
-    #All products (inventory)
     products = Product.objects.all()
-
-    #Out of stock
     out_of_stock = Product.objects.filter(quantity=0)
-
-    #Low stock (optional)
     low_stock = Product.objects.filter(quantity__lte=5, quantity__gt=0)
 
     context = {
@@ -462,10 +747,11 @@ def sales_report(request):
         'total_orders': total_orders,
         'products': products,
         'out_of_stock': out_of_stock,
-        'low_stock': low_stock
+        'low_stock': low_stock,
     }
 
     return render(request, 'store/report.html', context)
+
 
 def export_excel(request):
     try:
@@ -477,12 +763,11 @@ def export_excel(request):
     ws = wb.active
     ws.title = "Sales Report"
 
-    # Header
     ws.append(['Product', 'Sold', 'Revenue'])
 
     data = OrderItem.objects.values('product__name').annotate(
         sold=Sum('quantity'),
-        revenue=Sum(F('quantity') * F('price'))
+        revenue=Sum(F('quantity') * F('price')),
     )
 
     total = 0.0
@@ -492,7 +777,7 @@ def export_excel(request):
         ws.append([
             item['product__name'],
             item['sold'],
-            revenue
+            revenue,
         ])
         total += revenue
 
@@ -516,12 +801,11 @@ def export_pdf(request):
     response['Content-Disposition'] = 'attachment; filename="report.pdf"'
 
     doc = SimpleDocTemplate(response)
-
     data_list = [['Product', 'Sold', 'Revenue']]
 
     data = OrderItem.objects.values('product__name').annotate(
         sold=Sum('quantity'),
-        revenue=Sum(F('quantity') * F('price'))
+        revenue=Sum(F('quantity') * F('price')),
     )
 
     total_revenue = 0
@@ -531,7 +815,7 @@ def export_pdf(request):
         data_list.append([
             item['product__name'],
             item['sold'],
-            revenue
+            revenue,
         ])
 
     data_list.append(['Total Revenue', '', total_revenue])
@@ -540,10 +824,3 @@ def export_pdf(request):
     doc.build([table])
 
     return response
-
-
-
-
-
-
-

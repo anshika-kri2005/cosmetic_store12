@@ -33,39 +33,36 @@ body{
 
 <div class="container py-5">
 
-<h2 class="mb-4 text-center" style="color:#ff1a66;">🧾 My Orders</h2>
+<h2 class="mb-4 text-center" style="color:#ff1a66;">My Orders</h2>
 
 {% if orders %}
     {% for order in orders %}
-    
     <div class="order-card">
-
-        <div class="d-flex justify-content-between">
+        <div class="d-flex justify-content-between gap-3 flex-wrap">
             <div>
                 <strong>Order ID:</strong> #{{ order.id }} <br>
                 <strong>Date:</strong> {{ order.created_at }} <br>
-                <strong>Total:</strong> ₹{{ order.total_amount }} <br>
-                <strong>Payment:</strong> {{ order.payment_method }}
+                <strong>Total:</strong> Rs. {{ order.total_amount }} <br>
+                <strong>Payment:</strong> {{ order.get_payment_method_display }} <br>
+                <strong>Payment Status:</strong> {{ order.get_payment_status_display }}
             </div>
 
             <div class="text-end">
                 <a href="{% url 'track_order' order.id %}" class="btn btn-track">
-                    Track Order 📦
+                    Track Order
                 </a>
-            
+
                 <a href="{% url 'download_invoice' order.id %}" class="btn btn-sm btn-success">
-                    Download Invoice 🧾
+                    Download Invoice
                 </a>
-            </div>    
+            </div>
         </div>
-
     </div>
-
     {% endfor %}
 {% else %}
 
 <div class="alert alert-warning text-center">
-    No Orders Found 😢
+    No orders found.
 </div>
 
 {% endif %}
