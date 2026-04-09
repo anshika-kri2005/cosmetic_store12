@@ -1,0 +1,51 @@
+{% extends "admin/index.html" %}
+
+{% block extrastyle %}
+{{ block.super }}
+<style>
+    .reports-corner {
+        margin-bottom: 24px;
+        padding: 20px 24px;
+        border-radius: 18px;
+        background: linear-gradient(135deg, #fff7fb, #ffe7f1);
+        border: 1px solid #f4c5d7;
+        box-shadow: 0 10px 25px rgba(194, 24, 91, 0.08);
+    }
+    .reports-corner h2 {
+        margin: 0 0 8px;
+        color: #c2185b;
+    }
+    .reports-actions {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 12px;
+        margin-top: 16px;
+    }
+    .reports-actions a {
+        display: inline-block;
+        padding: 10px 16px;
+        border-radius: 999px;
+        background: #c2185b;
+        color: #fff;
+        text-decoration: none;
+        font-weight: 600;
+    }
+    .reports-actions a.secondary {
+        background: #ffffff;
+        color: #c2185b;
+        border: 1px solid #c2185b;
+    }
+</style>
+{% endblock %}
+
+{% block content %}
+<div class="reports-corner">
+    <h2>Reports Corner</h2>
+    <p>Sales reports, payment summaries, and order payment controls are grouped here for quick admin access.</p>
+    <div class="reports-actions">
+        <a href="{% url 'admin_reports_dashboard' %}">Open Reports Dashboard</a>
+        <a href="{% url 'admin:store_order_changelist' %}" class="secondary">Manage Orders and Payments</a>
+    </div>
+</div>
+{{ block.super }}
+{% endblock %}

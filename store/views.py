@@ -4,18 +4,20 @@ from decimal import Decimal
 from io import BytesIO
 
 from django.conf import settings
+from django.contrib.admin.views.decorators import staff_member_required
 from django.contrib import messages
 from django.contrib.auth import logout
 from django.contrib.auth.decorators import login_required
 from django.contrib.auth.models import User
 from django.db import transaction
-from django.db.models import F, Q, Sum
+from django.db.models import Avg, Count, F, Q, Sum
 from django.http import HttpResponse, JsonResponse
 from django.shortcuts import get_object_or_404, redirect, render
 from django.urls import reverse
 from django.views.decorators.http import require_POST
 
-from .models import Cart, Category, Customer, Order, OrderItem, Product, ShippingAddress
+from .forms import ReviewForm
+from .models import Cart, Category, Customer, Order, OrderItem, Product, Review, ShippingAddress
 
 
 CHECKOUT_SESSION_KEY = 'checkout_state'
@@ -287,12 +289,17 @@ def add_to_cart(request, product_id):
 def product_detail(request, pk):
     product = get_object_or_404(Product, pk=pk)
     related_products = Product.objects.filter(category=product.category).exclude(pk=product.pk)[:4]
+    reviews = Review.objects.filter(product=product).select_related('user').order_by('-created_at')
+    review_summary = reviews.aggregate(average_rating=Avg('rating'), review_count=Count('id'))
     return render(
         request,
         'store/product_detail.html',
         {
             'product': product,
             'related_products': related_products,
+            'reviews': reviews,
+            'review_count': review_summary['review_count'] or 0,
+            'average_rating': review_summary['average_rating'] or 0,
         },
     )
 
@@ -703,8 +710,81 @@ def track_order(request, order_id):
 
 @login_required
 def my_orders(request):
-    orders = Order.objects.filter(user=request.user).order_by('-id')
+    orders = list(
+        Order.objects.filter(user=request.user)
+        .select_related('address')
+        .prefetch_related('orderitem_set__product')
+        .order_by('-id')
+    )
+    reviewed_product_ids = {
+        item.product_id
+        for order in orders
+        for item in order.orderitem_set.all()
+    }
+    review_lookup = {}
+    if reviewed_product_ids:
+        for review in (
+            Review.objects.filter(user=request.user, product_id__in=reviewed_product_ids)
+            .select_related('product')
+            .order_by('product_id', '-created_at')
+        ):
+            review_lookup.setdefault(review.product_id, review)
+
+    for order in orders:
+        order.items_with_reviews = []
+        for item in order.orderitem_set.all():
+            item.user_review = review_lookup.get(item.product_id)
+            item.can_review = order.status == 'delivered'
+            order.items_with_reviews.append(item)
+
     return render(request, 'store/my_orders.html', {'orders': orders})
+
+
+@login_required
+@require_POST
+def submit_review(request, order_id, product_id):
+    order = get_object_or_404(
+        Order.objects.prefetch_related('orderitem_set'),
+        id=order_id,
+        user=request.user,
+    )
+
+    if order.status != 'delivered':
+        messages.error(request, "Review can be shared after the order is delivered.")
+        return redirect('my_orders')
+
+    if not order.orderitem_set.filter(product_id=product_id).exists():
+        messages.error(request, "This product was not found in your selected order.")
+        return redirect('my_orders')
+
+    form = ReviewForm(request.POST)
+    if not form.is_valid():
+        error_message = next(iter(form.errors.values()))[0]
+        messages.error(request, error_message)
+        return redirect('my_orders')
+
+    review_data = form.cleaned_data
+    existing_review = (
+        Review.objects.filter(user=request.user, product_id=product_id)
+        .order_by('-created_at')
+        .first()
+    )
+
+    if existing_review:
+        existing_review.rating = review_data['rating']
+        existing_review.comment = review_data['comment']
+        existing_review.save(update_fields=['rating', 'comment'])
+        messages.success(request, "Your review has been updated.")
+    else:
+        Review.objects.create(
+            user=request.user,
+            product_id=product_id,
+            rating=review_data['rating'],
+            comment=review_data['comment'],
+        )
+        messages.success(request, "Your review has been shared.")
+
+    return redirect('my_orders')
 
 
 @login_required
@@ -821,7 +901,7 @@ def download_invoice(request, order_id):
     return response
 
 
-def sales_report(request):
+def _build_sales_report_context():
     data = OrderItem.objects.values('product__name').annotate(
         sold=Sum('quantity'),
         revenue=Sum(F('quantity') * F('price')),
@@ -833,8 +913,14 @@ def sales_report(request):
     products = Product.objects.all()
     out_of_stock = Product.objects.filter(quantity=0)
     low_stock = Product.objects.filter(quantity__lte=5, quantity__gt=0)
+    payment_summary = (
+        Order.objects.values('payment_status')
+        .annotate(total_orders=Count('id'), total_amount=Sum('total_amount'))
+        .order_by('payment_status')
+    )
+    recent_orders = Order.objects.select_related('user', 'address').order_by('-created_at')[:10]
 
-    context = {
+    return {
         'data': data,
         'total_sold': total_sold,
         'total_revenue': total_revenue,
@@ -842,11 +928,22 @@ def sales_report(request):
         'products': products,
         'out_of_stock': out_of_stock,
         'low_stock': low_stock,
+        'payment_summary': payment_summary,
+        'recent_orders': recent_orders,
     }
 
-    return render(request, 'store/report.html', context)
+
+@staff_member_required
+def sales_report(request):
+    return render(request, 'store/report.html', _build_sales_report_context())
 
 
+@staff_member_required
+def admin_reports_dashboard(request):
+    return render(request, 'admin/reports_dashboard.html', _build_sales_report_context())
+
+
+@staff_member_required
 def export_excel(request):
     try:
         import openpyxl
@@ -885,6 +982,7 @@ def export_excel(request):
     return response
 
 
+@staff_member_required
 def export_pdf(request):
     try:
         from reportlab.platypus import SimpleDocTemplate, Table

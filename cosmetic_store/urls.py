@@ -20,9 +20,11 @@ from django.conf import settings
 from django.conf.urls.static import static
 from django.views.static import serve
 from django.urls import re_path
+from store import views as store_views
 
 
 urlpatterns = [
+    path('admin/reports-dashboard/', store_views.admin_reports_dashboard, name='admin_reports_dashboard'),
     path('admin/', admin.site.urls),
     path('', include('store.urls')),  # frontend
 ]

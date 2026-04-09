@@ -40,6 +40,7 @@ urlpatterns = [
     path('payment/', views.payment, name='payment'),
     path('track-order/<int:order_id>/', views.track_order, name='track_order'),
     path('my-orders/', views.my_orders, name='my_orders'),
+    path('my-orders/<int:order_id>/review/<int:product_id>/', views.submit_review, name='submit_review'),
     path('download-invoice/<int:order_id>/', views.download_invoice, name='download_invoice'),
     path('profile/', views.profile, name='profile'),
     path('report/', views.sales_report, name='report'),
